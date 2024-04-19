@@ -6,7 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bresenham = "0.1.1"
 cgmath = "0.18.0"
 heapless = "0.8.0"
+pointy = {path= "vendor/pointy"}
 rusty-ppm = "0.3.0"
 simple-canvas = "0.1.1"

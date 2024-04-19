@@ -18,6 +18,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1fdabc7756949593fe60f30ec81974b613357de856987752631dea1e3394c80"
 
 [[package]]
+name = "bresenham"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfc1116225f66d2ea341a26503f83a6b1205070a6f7199ce1f1550ead91f6fd7"
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,8 +62,10 @@ dependencies = [
 name = "mazi_billiards_fractal"
 version = "0.1.0"
 dependencies = [
+ "bresenham",
  "cgmath",
  "heapless",
+ "pointy",
  "rusty-ppm",
  "simple-canvas",
 ]
@@ -69,6 +77,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0df0e5185db44f69b44f26786fe401b6c293d1907744beaa7fa62b2e5a517a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "pointy"
+version = "0.6.0"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
