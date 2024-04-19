@@ -16,7 +16,7 @@ use enterpolation::{linear::ConstEquidistantLinear, Curve};
 use palette::LinSrgb;
 
 type SceneLinesType = Vec<Seg<f64>, 512>;
-const ARENA_EDGES: usize = 5;
+const ARENA_EDGES: usize = 4;
 const ARENA_SIZE: f64 = 0.98;
 const SAMPLES_PER_PIXEL: usize = 10;
 
@@ -88,49 +88,42 @@ fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
 
     let mut accumulated_pixel: f64 = 0.0;
 
+    let start_x_table = (pixel_loc.0 as f64) / (context.width as f64);
+    let start_y_table = (pixel_loc.1 as f64) / (context.height as f64);
+    let start_pos = Pt::new(start_x_table, start_y_table);
+
     for _ in 0..SAMPLES_PER_PIXEL {
         lines.truncate(ARENA_EDGES);
 
-        let start_x_table = (pixel_loc.0 as f64) / (context.width as f64);
-        let start_y_table = (pixel_loc.1 as f64) / (context.height as f64);
-
-        let start_table = Pt::new(start_x_table, start_y_table);
-
-        let mut ball = Seg::new(start_table, start_table + Pt::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)) * 10.0);
-        let mut _total_length: f64 = 0.0;
-        let mut total_bounces: f64 = 0.0;
-
-        let mut skip_pixel = false;
+        let rand_dir =  Pt::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)) * 10.0;
+        let mut ball = Seg::new(start_pos, start_pos + rand_dir);
+        let mut path_length: f64 = 0.0;
+        let mut _no_bounces: i32 = 0;
 
         loop {
             match test_ball_with_scene(ball, &lines) {
                 Some((line, col_point, distance)) => {
-                    _total_length += distance;
-                    total_bounces += 1.0;
+                    path_length += distance;
+                    _no_bounces += 1;
 
-                    if distance < 0.0001 {
-                        accumulated_pixel += _total_length;
+                    if distance < 0.0001 || lines.is_full() {
+                        accumulated_pixel += _no_bounces as f64;
 
                         break;
                     } else {
-                        if lines.push(Seg::new(ball.p0, col_point)).is_err() {
-                            accumulated_pixel += _total_length;
-                            break;
-                        }
+                        lines.push(Seg::new(ball.p0, col_point)).unwrap();
                         ball = reflection(ball.p0, line, col_point);
+
+                        //Move ball forward a little bit to prevent immediate collision with itself
+                        // or the line it just bounced of from
                         ball.p0 = ball.p0 + (ball.p1 - ball.p0).normalize() * 0.0001;
                     }
                 }
                 None => {
                     // keep pixel as background
-                    skip_pixel = true;
-                    break;
+                    return;
                 }
             }
-        }
-
-        if skip_pixel {
-            break;
         }
     }
 
