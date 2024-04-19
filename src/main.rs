@@ -4,12 +4,22 @@ use simple_canvas::Canvas;
 use rusty_ppm::ppm_writer;
 use cgmath::{Vector3, Vector2};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use cgmath::num_traits::clamp;
 use pointy::{Seg, Pt};
 use heapless::Vec;
 use bresenham;
+use rand::prelude::*;
+use rayon::prelude::*;
 
-type SceneLinesType = Vec<Seg<f64>, 1024>;
+use enterpolation::{linear::ConstEquidistantLinear, Curve};
+use palette::LinSrgb;
+
+type SceneLinesType = Vec<Seg<f64>, 512>;
+const ARENA_EDGES: usize = 5;
+const ARENA_SIZE: f64 = 0.98;
+const SAMPLES_PER_PIXEL: usize = 10;
+
 
 fn draw_line<T: Copy>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenham::Point, v: T)
 {
@@ -22,24 +32,21 @@ fn draw_line<T: Copy>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenha
     }
 }
 
-fn test_ball_with_scene(ball: Seg<f64>, scene : &SceneLinesType, ignore_line: Option<usize>) -> Option<(Seg<f64>, Pt<f64>, f64, usize)>
+fn test_ball_with_scene(ball: Seg<f64>, scene : &SceneLinesType) -> Option<(Seg<f64>, Pt<f64>, f64)>
 {
-    let mut result: Option<(Seg<f64>, Pt<f64>, f64, usize)> = None;
+    let mut result: Option<(Seg<f64>, Pt<f64>, f64)> = None;
 
-    for (n, line) in scene.iter().enumerate() {
-        if ignore_line.unwrap_or(usize::MAX) == n {
-            continue;
-        }
+    for line in scene.iter() {
 
         match ball.intersection(*line) {
             Some(pt) => {
                 let distance = pt.distance(ball.p0);
                 let closest_distance_so_far = match result {
-                    Some((_, __, x, ___)) => {x}
+                    Some((_, __, x)) => {x}
                     None => {f64::INFINITY}
                 };
                 if distance < closest_distance_so_far {
-                    result = Some((*line, pt, distance, n));
+                    result = Some((*line, pt, distance));
                 }
             }
             None => {}
@@ -65,118 +72,128 @@ fn draw_segment(canvas: &mut Canvas<Vector3<f64>>, segment: Seg<f64>)
     draw_line(canvas, p0, p1, Vector3::new(1.0, 1.0, 1.0));
 }
 
+#[derive(Clone)]
+struct ThreadContext {
+    rng: ThreadRng,
+    canvas: Arc<Mutex<Canvas<f64>>>,
+    lines: SceneLinesType,
+    width: usize,
+    height: usize
+}
+
+fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
+    let pixel_loc = (pixel_idx % context.width, pixel_idx / context.width);
+    let lines = &mut context.lines;
+    let rng = &mut context.rng;
+
+    let mut accumulated_pixel: f64 = 0.0;
+
+    for _ in 0..SAMPLES_PER_PIXEL {
+        lines.truncate(ARENA_EDGES);
+
+        let start_x_table = (pixel_loc.0 as f64) / (context.width as f64);
+        let start_y_table = (pixel_loc.1 as f64) / (context.height as f64);
+
+        let start_table = Pt::new(start_x_table, start_y_table);
+
+        let mut ball = Seg::new(start_table, start_table + Pt::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)) * 10.0);
+        let mut _total_length: f64 = 0.0;
+        let mut total_bounces: f64 = 0.0;
+
+        let mut skip_pixel = false;
+
+        loop {
+            match test_ball_with_scene(ball, &lines) {
+                Some((line, col_point, distance)) => {
+                    _total_length += distance;
+                    total_bounces += 1.0;
+
+                    if distance < 0.0001 {
+                        accumulated_pixel += _total_length;
+
+                        break;
+                    } else {
+                        if lines.push(Seg::new(ball.p0, col_point)).is_err() {
+                            accumulated_pixel += _total_length;
+                            break;
+                        }
+                        ball = reflection(ball.p0, line, col_point);
+                        ball.p0 = ball.p0 + (ball.p1 - ball.p0).normalize() * 0.0001;
+                    }
+                }
+                None => {
+                    // keep pixel as background
+                    skip_pixel = true;
+                    break;
+                }
+            }
+        }
+
+        if skip_pixel {
+            break;
+        }
+    }
+
+
+    context.canvas.lock().unwrap().data[pixel_loc.0 + context.width * pixel_loc.1] += accumulated_pixel;
+}
+
+fn initial_arena() -> SceneLinesType {
+    let mut lines: SceneLinesType = Vec::new();
+
+    for i in 0..ARENA_EDGES {
+        let angle0 = (i as f64) * 2.0 * PI / (ARENA_EDGES as f64);
+        let angle1 = ((i as f64) + 1.0) * 2.0 * PI / (ARENA_EDGES as f64);
+        let center = Pt::new(0.5, 0.5);
+
+        lines.push(Seg::new(center + Pt::from_angle(angle0) * ARENA_SIZE / 2.0,
+                            center + Pt::from_angle(angle1) * ARENA_SIZE / 2.0)).unwrap();
+    }
+
+    lines
+}
+
 fn main() {
     println!("Hello, world!");
 
     let image_size = Vector2::new(1024, 1024);
 
-    let mut canvas: Canvas<Vector3<f64>> = Canvas::new(image_size.x as usize, image_size.y as usize, Vector3::new(0.0, 0.0, 0.0));
+    let mut canvas: Canvas<f64> = Canvas::new(image_size.x as usize, image_size.y as usize, 0.0);
 
-    let mut lines: SceneLinesType = Vec::new();
-
-    //
-    // lines.push(Seg::new(Pt::new(0.20, 0.0), Pt::new(0.6, 0.5))).unwrap();
-    //
-    // for line in &lines {
-    //     draw_segment(&mut canvas, *line);
-    // }
-    //
-    // let b = Seg::new(Pt::new(1.0, 0.0), Pt::new(-100.0, 100.0));
-    // draw_segment(&mut canvas, b);
-    //
-    // match(test_ball_with_scene(b, &lines))
-    // {
-    //     None => {}
-    //     Some((line, col_point, distance)) => {
-    //         let r =  reflection(b.p0, line, col_point, distance);
-    //         draw_segment(&mut canvas, r);
-    //     }
-    // }
+    let width = canvas.width;
+    let height = canvas.height;
+    let shared_canvas = Arc::new(Mutex::new(canvas));
 
 
-
-    let n = 3;
-    let arena_size: f64 = 0.8;
-
-    for start_x_img in 0 .. canvas.width {
-        println!("{}", start_x_img);
-        for start_y_img in 0 .. canvas.height {
-
-
-            // if start_x_img != 500 || start_y_img != 512 {
-            //     continue;
-            // }
-
-            lines.clear();
-
-            for i in 0 .. n {
-                let angle0 = (i as f64) * 2.0 * PI / (n as f64);
-                let angle1 = ((i as f64) + 1.0) * 2.0 * PI / (n as f64);
-                let center = Pt::new(0.5, 0.5);
-
-                lines.push(Seg::new(center + Pt::from_angle(angle0) * arena_size / 2.0,
-                                    center + Pt::from_angle(angle1) * arena_size / 2.0)).unwrap();
-            }
-            //
-            // lines.push(Seg::new(Pt::new(0.1, 0.1), Pt::new(0.9, 0.11))).unwrap();
-            // lines.push(Seg::new(Pt::new(0.9,0.11), Pt::new(0.91, 0.9))).unwrap();
-            // lines.push(Seg::new(Pt::new(0.91,0.9), Pt::new(0.1, 0.1))).unwrap();
-
-            let start_x_table = (start_x_img as f64) / (canvas.width as f64);
-            let start_y_table = (start_y_img as f64) / (canvas.height as f64);
-
-            let start_table = Pt::new(start_x_table, start_y_table);
-
-            let mut ball = Seg::new(start_table, start_table - (start_table - Pt::new(0.5, 0.5))*10.0 );
-            let mut last_intersected_line: Option<usize> = None;
-            let mut _total_length: f64 = 0.0;
-            let mut total_bounces: f64 = 0.0;
-
-            loop {
-                match test_ball_with_scene(ball, &lines, last_intersected_line) {
-
-                    Some((line, col_point, distance, collided_with_index)) => {
-                        last_intersected_line = Some(collided_with_index);
-                        _total_length += distance;
-                        total_bounces += 1.0;
-
-                        if distance < 0.0001 {
-                            // enough tested, color in the pixel
-                            //println!("{}", total_length);
-                            canvas.data[start_x_img + canvas.width * start_y_img] = Vector3::new(_total_length.log10(), 0.0, 0.0);
-
-                            break;
-                        } else {
-                            if lines.push(Seg::new(ball.p0, col_point)).is_err() {
-                                canvas.data[start_x_img + canvas.width * start_y_img] = Vector3::new(_total_length.log10(), 0.0, 0.0);
-                                break;
-                            }
-                            ball = reflection(ball.p0, line, col_point);
-                            ball.p0 = ball.p0 + (ball.p1 - ball.p0).normalize() * 0.0001;
-                            //draw_segment(&mut canvas, ball);
-                            // for line in &lines {
-                            //     draw_segment(&mut canvas, *line);
-                            // }
-                        }
-
-                    }
-                    None => {
-                        // keep pixel as background
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    let all_pixels = 0 .. width*height;
+    let _: std::vec::Vec<_> = all_pixels.into_par_iter().map_init(|| ThreadContext{
+        rng: thread_rng(),
+        width,
+        height,
+        canvas: shared_canvas.clone(),
+        lines: initial_arena(),
+    }, calc_pixel).collect();
 
 
     println!("Writing image file");
-    let mut post_processed_canvas: Canvas<Vector3<u8>> = Canvas::new(canvas.width, canvas.height, Vector3::new(0, 0, 0));
-    let in_max = canvas.iter().max_by(|a, b| a.x.partial_cmp(&b.x).unwrap()).unwrap();
+
+    let canvas = shared_canvas.lock().unwrap();
+
+    let gradient: std::vec::Vec<_> = ConstEquidistantLinear::<f32, _, 3>::equidistant_unchecked([
+        LinSrgb::new(0.00, 0.05, 0.20),
+        LinSrgb::new(0.70, 0.10, 0.20),
+        LinSrgb::new(0.95, 0.90, 0.30),
+    ]).take(256).collect();
+
+    let mut post_processed_canvas: Canvas<Vector3<u8>> = Canvas::new(width, height, Vector3::new(0, 0, 0));
+    let in_max = canvas.iter().max_by(|a, b| a.partial_cmp(&b).unwrap()).unwrap();
 
     for (a, b) in zip(canvas.iter(), post_processed_canvas.iter_mut()) {
-        let x = clamp(254.0 * a.x/in_max.x, 0.0, 254.0) as u8;
-        *b = Vector3::new(x, x, x);
+        let x = clamp(254.0 * a/in_max, 0.0, 254.0) as u8;
+        let cr = (gradient[x as usize].red * 255.0) as u8;
+        let cg = (gradient[x as usize].green * 255.0) as u8;
+        let cb = (gradient[x as usize].blue * 255.0) as u8;
+        *b = Vector3::new(cr, cg, cb);
 
     }
     ppm_writer::write_binary_ppm(&post_processed_canvas, Path::new("."), "test.ppm").unwrap();

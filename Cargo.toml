@@ -8,7 +8,11 @@ edition = "2021"
 [dependencies]
 bresenham = "0.1.1"
 cgmath = "0.18.0"
+enterpolation = "0.2.1"
 heapless = "0.8.0"
+palette = "0.7.5"
 pointy = {path= "vendor/pointy"}
+rand = "0.8.5"
+rayon = "1.10.0"
 rusty-ppm = "0.3.0"
 simple-canvas = "0.1.1"
