@@ -20,7 +20,7 @@ use palette::LinSrgb;
 type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;
-const SAMPLES_PER_PIXEL: usize = 1;
+const SAMPLES_PER_PIXEL: usize = 2;
 
 
 fn draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenham::Point, v: T)
@@ -134,6 +134,11 @@ fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
                     if distance < 0.0001 || lines.is_full() {
                         accumulated_pixel += _no_bounces as f64;
 
+                        let x = clamp((col_point.x * context.width as f64) as usize, 0, context.width - 1);
+                        let y = clamp((col_point.y * context.height as f64) as usize, 0, context.height - 1);
+
+                        context.canvas.lock().unwrap().data[x + context.width * y] += path_length;
+
                         break;
                     } else {
                         lines.push(Line::new(ball.start, col_point)).unwrap();
@@ -151,9 +156,21 @@ fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
                 }
             }
         }
+
+        // if draw_trajectory {
+        //     let mut canvas = context.canvas.lock().unwrap();
+        //
+        //     for line in lines.iter() {
+        //         println!("{}", line.start.x);
+        //
+        //         draw_segment(&mut canvas, *line, 10.0 * (iter_n+1) as f64);
+        //     }
+        // }
     }
 
-     context.canvas.lock().unwrap().data[pixel_loc.0 + context.width * pixel_loc.1] += accumulated_pixel;
+     //
+
+
 }
 
 
