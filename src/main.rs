@@ -20,7 +20,7 @@ use palette::LinSrgb;
 type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;
-const SAMPLES_PER_PIXEL: usize = 10;
+const SAMPLES_PER_PIXEL: usize = 1;
 
 
 fn draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenham::Point, v: T)
@@ -106,19 +106,21 @@ struct ThreadContext {
 
 fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
     let pixel_loc = (pixel_idx % context.width, pixel_idx / context.width);
+    let pixel_size = 1.0 / context.width as f64;
+
     let lines = &mut context.lines;
     let rng = &mut context.rng;
 
     let mut accumulated_pixel: f64 = 0.0;
 
-    let start_x_table = (pixel_loc.0 as f64) / (context.width as f64);
-    let start_y_table = (pixel_loc.1 as f64) / (context.height as f64);
-    let start_pos = coord! {x: start_x_table, y: start_y_table};
-
     for iter_n in 0..SAMPLES_PER_PIXEL {
         lines.truncate(ARENA_EDGES);
 
-        let rand_dir =  angled_coord(rng.gen_range(0.0..PI*2.0)) * 10.0;
+        let start_x_table = (pixel_loc.0 as f64) / (context.width as f64) + rng.gen_range(0.0 .. pixel_size);
+        let start_y_table = (pixel_loc.1 as f64) / (context.height as f64) + rng.gen_range(0.0 .. pixel_size);
+        let start_pos = coord! {x: start_x_table, y: start_y_table};
+
+        let rand_dir =  angled_coord(rng.gen_range(0.0 .. PI*2.0)) * 10.0;
         let mut ball = Line::new(start_pos, start_pos + rand_dir);
         let mut path_length: f64 = 0.0;
         let mut _no_bounces: i32 = 0;
