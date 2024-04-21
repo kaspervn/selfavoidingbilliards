@@ -1,27 +1,28 @@
 use std::f64::consts::PI;
 use std::iter::zip;
 use std::ops::Add;
-use simple_canvas::Canvas;
-use rusty_ppm::ppm_writer;
-use cgmath::{Vector3};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use cgmath::num_traits::clamp;
-use heapless::Vec;
-use bresenham;
-use rand::prelude::*;
-use geo::{Line, Coord, coord, Vector2DOps, EuclideanDistance};
-use geo::line_intersection::{line_intersection, LineIntersection};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread;
 use std::time::Duration;
-use enterpolation::{linear::ConstEquidistantLinear, Curve};
+
+use bresenham;
+use cgmath::Vector3;
+use cgmath::num_traits::clamp;
+use enterpolation::{Curve, linear::ConstEquidistantLinear};
+use geo::{Coord, coord, EuclideanDistance, Line, Vector2DOps};
+use geo::line_intersection::{line_intersection, LineIntersection};
+use heapless::Vec;
+use indicatif::{ProgressBar, ProgressStyle};
 use palette::LinSrgb;
+use rand::prelude::*;
+use rusty_ppm::ppm_writer;
+use simple_canvas::Canvas;
+
 use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
-use indicatif::{ProgressBar, ProgressStyle};
-
 
 type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
