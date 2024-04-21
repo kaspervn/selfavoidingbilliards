@@ -16,11 +16,12 @@ use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread;
 use std::time::Duration;
-
 use enterpolation::{linear::ConstEquidistantLinear, Curve};
 use palette::LinSrgb;
 use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
+use indicatif::{ProgressBar, ProgressStyle};
+
 
 type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
@@ -157,7 +158,7 @@ enum FromThreadMsg {
 fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
               tx: mpsc::Sender<FromThreadMsg>,
               result_canvas: Arc<Mutex<Canvas<f64>>>) {
-    const NUMBER_OF_SIMS_PER_REPORT: usize = 100;
+    const NUMBER_OF_SIMS_PER_REPORT: usize = 1000;
 
     let width = result_canvas.lock().unwrap().width;
     let height = result_canvas.lock().unwrap().height;
@@ -200,11 +201,8 @@ struct ThreadHandle {
 
 
 fn main() {
-    println!("Hello, world!");
-    let canvas: Canvas<f64> = Canvas::new(512, 512, 0.0);
+    let canvas: Canvas<f64> = Canvas::new(4096*2, 4096*2, 0.0);
 
-    // let width = canvas.width;
-    // let height = canvas.height;
     let shared_canvas = Arc::new(Mutex::new(canvas));
 
     const MAX_THREADS: usize = 16;
@@ -229,14 +227,21 @@ fn main() {
         }).unwrap();
     }
 
-    let mut total_simulations = 0;
-    while total_simulations < 10_000_000 {
+    let total_simulations: usize = 1_000_000_000;
+
+    let bar = ProgressBar::new(total_simulations as u64);
+    bar.set_style(ProgressStyle::with_template("[{elapsed_precise}]/[{duration}] {bar:40.cyan/blue} {pos:>7}/{len:7} ({percent}%) {msg}").unwrap());
+
+    let mut simulations_done: usize = 0;
+    while simulations_done < total_simulations {
         for thread in &thread_handles {
             assert!(!thread.handle.is_finished());
 
             match thread.from_thread.recv_timeout(Duration::from_millis(1)) {
                 Ok(REPORT(n)) => {
-                    total_simulations += n;
+                    simulations_done += n;
+                    bar.inc(n as u64);
+                    bar.eta();
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     panic!();
@@ -246,6 +251,7 @@ fn main() {
             }
         }
     }
+    bar.finish();
 
     for thread in &thread_handles {
         thread.to_thread.send(ACCUMULATE).unwrap();
@@ -257,27 +263,7 @@ fn main() {
         handle.handle.join().unwrap();
     }
 
-    // let all_pixels = 0 .. width*height;
-    // let _: std::vec::Vec<_> = all_pixels.into_par_iter().map_init(|| SimContext {
-    //     rng: thread_rng(),
-    //     width,
-    //     height,
-    //     canvas: shared_canvas.clone(),
-    //     lines: initial_arena(),
-    // }, sim_thread).collect();
-
-
-
-    // calc_pixel(&mut ThreadContext{
-    //     rng: thread_rng(),
-    //     width,
-    //     height,
-    //     canvas: shared_canvas.clone(),
-    //     lines: initial_arena(),
-    // }, 200*512 + 200);
-
-
-    println!("Writing image file");
+    println!("post processing image file");
 
     let canvas = shared_canvas.lock().unwrap();
 
@@ -299,5 +285,7 @@ fn main() {
         *b = Vector3::new(cr, cg, cb);
 
     }
+
+    println!("writing image file");
     ppm_writer::write_binary_ppm(&post_processed_canvas, Path::new("."), "test.ppm").unwrap();
 }
