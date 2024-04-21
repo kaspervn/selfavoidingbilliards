@@ -3,27 +3,31 @@ use std::iter::zip;
 use std::ops::Add;
 use simple_canvas::Canvas;
 use rusty_ppm::ppm_writer;
-use cgmath::{Vector3, Vector2};
+use cgmath::{Vector3};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use cgmath::num_traits::clamp;
 use heapless::Vec;
 use bresenham;
 use rand::prelude::*;
-use rayon::prelude::*;
 use geo::{Line, Coord, coord, Vector2DOps, EuclideanDistance};
 use geo::line_intersection::{line_intersection, LineIntersection};
+use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
+use std::thread;
+use std::time::Duration;
 
 use enterpolation::{linear::ConstEquidistantLinear, Curve};
 use palette::LinSrgb;
+use crate::FromThreadMsg::REPORT;
+use crate::ToThreadMsg::{ACCUMULATE, STOP};
 
 type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;
-const SAMPLES_PER_PIXEL: usize = 2;
 
 
-fn draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenham::Point, v: T)
+fn _draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::Point, p1: bresenham::Point, v: T)
 {
     for (x, y) in bresenham::Bresenham::new(p0, p1) {
         let x = x as usize;
@@ -35,11 +39,11 @@ fn draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::P
     }
 }
 
-fn draw_segment<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, segment: Line, val: T)
+fn _draw_segment<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, segment: Line, val: T)
 {
     let p0 = ((segment.start.x * canvas.width as f64) as isize, (segment.start.y * canvas.height as f64) as isize);
     let p1 = ((segment.end.x * canvas.width as f64) as isize, (segment.end.y * canvas.height as f64) as isize);
-    draw_line(canvas, p0, p1, val);
+    _draw_line(canvas, p0, p1, val);
 }
 
 fn test_ball_with_scene(ball: Line, scene : &SceneLinesType) -> Option<(Line, Coord, f64)>
@@ -95,106 +99,174 @@ fn initial_arena() -> SceneLinesType {
 }
 
 
-#[derive(Clone)]
-struct ThreadContext {
-    rng: ThreadRng,
-    canvas: Arc<Mutex<Canvas<f64>>>,
-    lines: SceneLinesType,
-    width: usize,
-    height: usize
-}
 
-fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
-    let pixel_loc = (pixel_idx % context.width, pixel_idx / context.width);
-    let pixel_size = 1.0 / context.width as f64;
+fn single_simulation(canvas: &mut Canvas<f64>, obstacles: &mut SceneLinesType, rng: &mut ThreadRng)
+{
+    let clean_scene_size = obstacles.len();
 
-    let lines = &mut context.lines;
-    let rng = &mut context.rng;
+    let start_pos = coord! {x: rng.gen_range(0.0 .. 1.0),
+                                y: rng.gen_range(0.0 .. 1.0)};
+    let rand_dir =  angled_coord(rng.gen_range(0.0 .. PI*2.0)) * 10.0;
 
-    let mut accumulated_pixel: f64 = 0.0;
+    let mut ball = Line::new(start_pos, start_pos + rand_dir);
+    let mut path_length: f64 = 0.0;
+    let mut _no_bounces: i32 = 0;
 
-    for iter_n in 0..SAMPLES_PER_PIXEL {
-        lines.truncate(ARENA_EDGES);
+    loop {
+        match test_ball_with_scene(ball, &obstacles) {
+            Some((line, col_point, distance)) => {
+                path_length += distance;
+                _no_bounces += 1;
 
-        let start_x_table = (pixel_loc.0 as f64) / (context.width as f64) + rng.gen_range(0.0 .. pixel_size);
-        let start_y_table = (pixel_loc.1 as f64) / (context.height as f64) + rng.gen_range(0.0 .. pixel_size);
-        let start_pos = coord! {x: start_x_table, y: start_y_table};
+                if distance < 0.0001 || obstacles.is_full() {
 
-        let rand_dir =  angled_coord(rng.gen_range(0.0 .. PI*2.0)) * 10.0;
-        let mut ball = Line::new(start_pos, start_pos + rand_dir);
-        let mut path_length: f64 = 0.0;
-        let mut _no_bounces: i32 = 0;
+                    let x = clamp((col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
+                    let y = clamp((col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
 
-        loop {
-            match test_ball_with_scene(ball, &lines) {
-                Some((line, col_point, distance)) => {
-                    path_length += distance;
-                    _no_bounces += 1;
+                    canvas.data[x + canvas.width * y] += path_length;
 
-                    if distance < 0.0001 || lines.is_full() {
-                        accumulated_pixel += _no_bounces as f64;
-
-                        let x = clamp((col_point.x * context.width as f64) as usize, 0, context.width - 1);
-                        let y = clamp((col_point.y * context.height as f64) as usize, 0, context.height - 1);
-
-                        context.canvas.lock().unwrap().data[x + context.width * y] += path_length;
-
-                        break;
-                    } else {
-                        lines.push(Line::new(ball.start, col_point)).unwrap();
-                        ball = reflection(ball.start, line, col_point).unwrap();
-
-                        //Move ball forward a little bit to prevent immediate collision with itself
-                        // or the line it just bounced of from
-                        ball.start = ball.start + (ball.end - ball.start).try_normalize().unwrap() * 0.0001;
-                    }
-                }
-                None => {
-                    // keep pixel as background
-                    // accumulated_pixel += _no_bounces as f64;
                     break;
+                } else {
+                    obstacles.push(Line::new(ball.start, col_point)).unwrap();
+                    ball = reflection(ball.start, line, col_point).unwrap();
+
+                    // Move ball forward a little bit to prevent immediate collision with itself
+                    // or the line it just bounced of from
+                    ball.start = ball.start + (ball.end - ball.start).try_normalize().unwrap() * 0.0001;
                 }
             }
+            None => {
+                break;
+            }
         }
-
-        // if draw_trajectory {
-        //     let mut canvas = context.canvas.lock().unwrap();
-        //
-        //     for line in lines.iter() {
-        //         println!("{}", line.start.x);
-        //
-        //         draw_segment(&mut canvas, *line, 10.0 * (iter_n+1) as f64);
-        //     }
-        // }
     }
 
-     //
-
-
+    // Leave the scene in state that we started with
+    obstacles.truncate(clean_scene_size);
 }
 
+enum ToThreadMsg {
+    ACCUMULATE,
+    STOP
+}
+
+enum FromThreadMsg {
+    REPORT(usize)
+}
+
+fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
+              tx: mpsc::Sender<FromThreadMsg>,
+              result_canvas: Arc<Mutex<Canvas<f64>>>) {
+    const NUMBER_OF_SIMS_PER_REPORT: usize = 100;
+
+    let width = result_canvas.lock().unwrap().width;
+    let height = result_canvas.lock().unwrap().height;
+
+    let mut thread_canvas: Canvas<f64> = Canvas::new(width, height, 0.0);
+    let mut scene = initial_arena();
+    let mut rng = thread_rng();
+
+    loop {
+
+        for _ in 0..NUMBER_OF_SIMS_PER_REPORT {
+            single_simulation(&mut thread_canvas, &mut scene, &mut rng);
+        }
+        tx.send(REPORT(NUMBER_OF_SIMS_PER_REPORT)).unwrap();
+
+        match rx.recv_timeout(Duration::ZERO) {
+            Ok(ACCUMULATE) => {
+                let mut locked_canvas = result_canvas.lock().unwrap();
+                for (p_in, p_out) in zip(thread_canvas.iter(), locked_canvas.iter_mut()) {
+                    *p_out += p_in;
+                }
+            }
+            Ok(STOP) => {
+                return
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!();
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ThreadHandle {
+    handle: thread::JoinHandle<()>,
+    to_thread: mpsc::Sender<ToThreadMsg>,
+    from_thread: mpsc::Receiver<FromThreadMsg>,
+}
 
 
 fn main() {
     println!("Hello, world!");
+    let canvas: Canvas<f64> = Canvas::new(512, 512, 0.0);
 
-    let image_size = Vector2::new(512, 512);
-
-    let mut canvas: Canvas<f64> = Canvas::new(image_size.x as usize, image_size.y as usize, 0.0);
-
-    let width = canvas.width;
-    let height = canvas.height;
+    // let width = canvas.width;
+    // let height = canvas.height;
     let shared_canvas = Arc::new(Mutex::new(canvas));
 
+    const MAX_THREADS: usize = 16;
 
-    let all_pixels = 0 .. width*height;
-    let _: std::vec::Vec<_> = all_pixels.into_par_iter().map_init(|| ThreadContext{
-        rng: thread_rng(),
-        width,
-        height,
-        canvas: shared_canvas.clone(),
-        lines: initial_arena(),
-    }, calc_pixel).collect();
+    let mut thread_handles: Vec<ThreadHandle, MAX_THREADS> = Vec::new();
+
+    for _ in 0..MAX_THREADS {
+        let (to_thread, to_thread_rx) = mpsc::channel();
+        let (from_thread_tx, from_thread) = mpsc::channel();
+
+
+        let canvas_ref = shared_canvas.clone();
+
+        let thread_handle = thread::spawn(move || {
+            sim_thread(to_thread_rx, from_thread_tx, canvas_ref)
+        });
+
+        thread_handles.push(ThreadHandle {
+            handle: thread_handle,
+            to_thread,
+            from_thread,
+        }).unwrap();
+    }
+
+    let mut total_simulations = 0;
+    while total_simulations < 10_000_000 {
+        for thread in &thread_handles {
+            assert!(!thread.handle.is_finished());
+
+            match thread.from_thread.recv_timeout(Duration::from_millis(1)) {
+                Ok(REPORT(n)) => {
+                    total_simulations += n;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!();
+                }
+
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+
+    for thread in &thread_handles {
+        thread.to_thread.send(ACCUMULATE).unwrap();
+        thread.to_thread.send(STOP).unwrap();
+    }
+
+    while ! thread_handles.is_empty() {
+        let handle = thread_handles.pop().unwrap();
+        handle.handle.join().unwrap();
+    }
+
+    // let all_pixels = 0 .. width*height;
+    // let _: std::vec::Vec<_> = all_pixels.into_par_iter().map_init(|| SimContext {
+    //     rng: thread_rng(),
+    //     width,
+    //     height,
+    //     canvas: shared_canvas.clone(),
+    //     lines: initial_arena(),
+    // }, sim_thread).collect();
+
+
 
     // calc_pixel(&mut ThreadContext{
     //     rng: thread_rng(),
@@ -215,7 +287,7 @@ fn main() {
         LinSrgb::new(0.95, 0.90, 0.30),
     ]).take(256).collect();
 
-    let mut post_processed_canvas: Canvas<Vector3<u8>> = Canvas::new(width, height, Vector3::new(0, 0, 0));
+    let mut post_processed_canvas: Canvas<Vector3<u8>> = Canvas::new(canvas.width, canvas.height, Vector3::new(0, 0, 0));
     let in_max = canvas.iter().max_by(|a, b| a.partial_cmp(&b).unwrap()).unwrap();
 
     for (a, b) in zip(canvas.iter(), post_processed_canvas.iter_mut()) {
