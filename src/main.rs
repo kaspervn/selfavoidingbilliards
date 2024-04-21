@@ -158,7 +158,7 @@ enum FromThreadMsg {
 fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
               tx: mpsc::Sender<FromThreadMsg>,
               result_canvas: Arc<Mutex<Canvas<f64>>>) {
-    const NUMBER_OF_SIMS_PER_REPORT: usize = 1000;
+    const NUMBER_OF_SIMS_PER_REPORT: usize = 10_000;
 
     let width = result_canvas.lock().unwrap().width;
     let height = result_canvas.lock().unwrap().height;
@@ -205,7 +205,7 @@ fn main() {
 
     let shared_canvas = Arc::new(Mutex::new(canvas));
 
-    const MAX_THREADS: usize = 16;
+    const MAX_THREADS: usize = 25;
 
     let mut thread_handles: Vec<ThreadHandle, MAX_THREADS> = Vec::new();
 
@@ -230,7 +230,7 @@ fn main() {
     let total_simulations: usize = 1_000_000_000;
 
     let bar = ProgressBar::new(total_simulations as u64);
-    bar.set_style(ProgressStyle::with_template("[{elapsed_precise}]/[{duration}] {bar:40.cyan/blue} {pos:>7}/{len:7} ({percent}%) {msg}").unwrap());
+    bar.set_style(ProgressStyle::with_template("[{elapsed_precise}]/[{eta} left] {bar:40.cyan/blue} {percent}% {pos:>7}/{len:7} {per_sec}").unwrap());
 
     let mut simulations_done: usize = 0;
     while simulations_done < total_simulations {
