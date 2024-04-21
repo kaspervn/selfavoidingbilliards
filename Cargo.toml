@@ -9,6 +9,7 @@ edition = "2021"
 bresenham = "0.1.1"
 cgmath = "0.18.0"
 enterpolation = "0.2.1"
+geo = "0.28.0"
 heapless = "0.8.0"
 palette = "0.7.5"
 pointy = {path= "vendor/pointy"}

@@ -7,16 +7,17 @@ use cgmath::{Vector3, Vector2};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use cgmath::num_traits::clamp;
-use pointy::{Seg, Pt};
 use heapless::Vec;
 use bresenham;
 use rand::prelude::*;
 use rayon::prelude::*;
+use geo::{Line, Coord, coord, Vector2DOps, EuclideanDistance};
+use geo::line_intersection::{line_intersection, LineIntersection};
 
 use enterpolation::{linear::ConstEquidistantLinear, Curve};
 use palette::LinSrgb;
 
-type SceneLinesType = Vec<Seg<f64>, 100>;
+type SceneLinesType = Vec<Line, 100>;
 const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;
 const SAMPLES_PER_PIXEL: usize = 10;
@@ -34,22 +35,22 @@ fn draw_line<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, p0: bresenham::P
     }
 }
 
-fn draw_segment<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, segment: Seg<f64>, val: T)
+fn draw_segment<T: Copy + Add<Output = T>>(canvas: &mut Canvas<T>, segment: Line, val: T)
 {
-    let p0 = ((segment.p0.x * canvas.width as f64) as isize, (segment.p0.y * canvas.height as f64) as isize);
-    let p1 = ((segment.p1.x * canvas.width as f64) as isize, (segment.p1.y * canvas.height as f64) as isize);
+    let p0 = ((segment.start.x * canvas.width as f64) as isize, (segment.start.y * canvas.height as f64) as isize);
+    let p1 = ((segment.end.x * canvas.width as f64) as isize, (segment.end.y * canvas.height as f64) as isize);
     draw_line(canvas, p0, p1, val);
 }
 
-fn test_ball_with_scene(ball: Seg<f64>, scene : &SceneLinesType) -> Option<(Seg<f64>, Pt<f64>, f64)>
+fn test_ball_with_scene(ball: Line, scene : &SceneLinesType) -> Option<(Line, Coord, f64)>
 {
-    let mut result: Option<(Seg<f64>, Pt<f64>, f64)> = None;
+    let mut result: Option<(Line, Coord, f64)> = None;
 
-    for line in scene.iter() {
+    for line in scene {
 
-        match ball.intersection(*line) {
-            Some(pt) => {
-                let distance = pt.distance(ball.p0);
+        match line_intersection(*line, ball) {
+            Some(LineIntersection::SinglePoint{intersection: pt, is_proper: _is_proper}) => {
+                let distance = pt.euclidean_distance(&ball.start);
                 let closest_distance_so_far = match result {
                     Some((_, __, x)) => {x}
                     None => {f64::INFINITY}
@@ -58,35 +59,39 @@ fn test_ball_with_scene(ball: Seg<f64>, scene : &SceneLinesType) -> Option<(Seg<
                     result = Some((*line, pt, distance));
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 
     result
 }
 
-fn reflection(ball: Pt<f64>, line: Seg<f64>, intersection: Pt<f64>) -> Seg<f64> {
-    let c_line = line.p0 - intersection;
+fn reflection(ball: Coord, line: Line, intersection: Coord) -> Option<Line> {
+    let c_line = line.start - intersection;
     let c_ball = ball - intersection;
 
-    let x =  c_line.normalize() * (-c_ball.dot(c_line.normalize()));
-    let reflected_dir = (x * 2.0 + c_ball).normalize();
-    Seg::new(intersection, intersection + reflected_dir * 100.0)
+    let x =  c_line.try_normalize()? * (-c_ball.dot_product(c_line.try_normalize()?));
+    let reflected_dir = (x * 2.0 + c_ball).try_normalize()?;
+    Some(Line::new(intersection, intersection + reflected_dir * 100.0))
+}
+
+fn angled_coord(angle: f64) -> Coord {
+    coord! {x: f64::cos(angle), y: f64::sin(angle)}
 }
 
 fn initial_arena() -> SceneLinesType {
-    let mut lines: SceneLinesType = Vec::new();
+    let mut obstacles: SceneLinesType = Vec::new();
 
     for i in 0..ARENA_EDGES {
         let angle0 = (i as f64) * 2.0 * PI / (ARENA_EDGES as f64);
         let angle1 = ((i as f64) + 1.0) * 2.0 * PI / (ARENA_EDGES as f64);
-        let center = Pt::new(0.5, 0.5);
+        let center = coord! {x: 0.5, y:0.5};
 
-        lines.push(Seg::new(center + Pt::from_angle(angle0) * ARENA_SIZE / 2.0,
-                            center + Pt::from_angle(angle1) * ARENA_SIZE / 2.0)).unwrap();
+        obstacles.push(Line::new(center + angled_coord(angle0) * ARENA_SIZE / 2.0,
+                                center + angled_coord(angle1) * ARENA_SIZE / 2.0)).unwrap();
     }
 
-    lines
+    obstacles
 }
 
 
@@ -108,13 +113,13 @@ fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
 
     let start_x_table = (pixel_loc.0 as f64) / (context.width as f64);
     let start_y_table = (pixel_loc.1 as f64) / (context.height as f64);
-    let start_pos = Pt::new(start_x_table, start_y_table);
+    let start_pos = coord! {x: start_x_table, y: start_y_table};
 
     for iter_n in 0..SAMPLES_PER_PIXEL {
         lines.truncate(ARENA_EDGES);
 
-        let rand_dir =  Pt::from_angle(rng.gen_range(0.0..PI*2.0)) * 10.0;
-        let mut ball = Seg::new(start_pos, start_pos + rand_dir);
+        let rand_dir =  angled_coord(rng.gen_range(0.0..PI*2.0)) * 10.0;
+        let mut ball = Line::new(start_pos, start_pos + rand_dir);
         let mut path_length: f64 = 0.0;
         let mut _no_bounces: i32 = 0;
 
@@ -129,12 +134,12 @@ fn calc_pixel(context: &mut ThreadContext, pixel_idx: usize) {
 
                         break;
                     } else {
-                        lines.push(Seg::new(ball.p0, col_point)).unwrap();
-                        ball = reflection(ball.p0, line, col_point);
+                        lines.push(Line::new(ball.start, col_point)).unwrap();
+                        ball = reflection(ball.start, line, col_point).unwrap();
 
                         //Move ball forward a little bit to prevent immediate collision with itself
                         // or the line it just bounced of from
-                        ball.p0 = ball.p0 + (ball.p1 - ball.p0).normalize() * 0.0001;
+                        ball.start = ball.start + (ball.end - ball.start).try_normalize().unwrap() * 0.0001;
                     }
                 }
                 None => {
