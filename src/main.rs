@@ -20,12 +20,18 @@ use palette::LinSrgb;
 use rand::prelude::*;
 use rusty_ppm::ppm_writer;
 use simple_canvas::Canvas;
+use tiff;
+use std::fs::File;
+use rusty_ppm::utils::generate_sample_binary_image;
+use tiff::encoder::colortype;
+
+use chrono::prelude::*;
 
 use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
 
-type SceneLinesType = Vec<Line, 100>;
-const ARENA_EDGES: usize = 5;
+type SceneLinesType = Vec<Line, 200>;
+const ARENA_EDGES: usize = 6;
 const ARENA_SIZE: f64 = 0.98;
 
 
@@ -130,7 +136,15 @@ fn single_simulation(canvas: &mut Canvas<f64>, obstacles: &mut SceneLinesType, r
                     break;
                 } else {
                     obstacles.push(Line::new(ball.start, col_point)).unwrap();
-                    ball = reflection(ball.start, line, col_point).unwrap();
+                    match reflection(ball.start, line, col_point) {
+                        None => {
+                            let x = clamp((col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
+                            let y = clamp((col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
+
+                            canvas.data[x + canvas.width * y] += path_length;
+                        }
+                        Some(b) => {ball = b;}
+                    }
 
                     // Move ball forward a little bit to prevent immediate collision with itself
                     // or the line it just bounced of from
@@ -159,7 +173,7 @@ enum FromThreadMsg {
 fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
               tx: mpsc::Sender<FromThreadMsg>,
               result_canvas: Arc<Mutex<Canvas<f64>>>) {
-    const NUMBER_OF_SIMS_PER_REPORT: usize = 10_000;
+    const NUMBER_OF_SIMS_PER_REPORT: usize = 100_000;
 
     let width = result_canvas.lock().unwrap().width;
     let height = result_canvas.lock().unwrap().height;
@@ -228,10 +242,11 @@ fn main() {
         }).unwrap();
     }
 
-    let total_simulations: usize = 1_000_000_000;
+    //let total_simulations: usize = 1_000_000_000;
+    let total_simulations: usize = 20_000_000_000;
 
     let bar = ProgressBar::new(total_simulations as u64);
-    bar.set_style(ProgressStyle::with_template("[{elapsed_precise}]/[{eta} left] {bar:40.cyan/blue} {percent}% {pos:>7}/{len:7} {per_sec}").unwrap());
+    bar.set_style(ProgressStyle::with_template("[{elapsed}]/[{eta} left] {bar:40.cyan/blue} {percent}% {pos:>7}/{len:7} {per_sec}").unwrap());
 
     let mut simulations_done: usize = 0;
     while simulations_done < total_simulations {
@@ -268,7 +283,23 @@ fn main() {
 
     let canvas = shared_canvas.lock().unwrap();
 
-    let gradient: std::vec::Vec<_> = ConstEquidistantLinear::<f32, _, 3>::equidistant_unchecked([
+    let mut normalized_canvas: Canvas<u32> = Canvas::new(canvas.width, canvas.height, 0);
+    let in_max = canvas.iter().max_by(|a, b| a.partial_cmp(&b).unwrap()).unwrap();
+    for (a, b) in zip(canvas.iter(), normalized_canvas.iter_mut()) {
+        *b = clamp((u32::MAX as f64 * a.log10() / in_max.log10()) as u32, 0, u32::MAX);
+    }
+
+    let f = File::create(format!("raw-{}.tiff", Local::now())).unwrap();
+
+    let mut encoder = tiff::encoder::TiffEncoder::new(f).unwrap();
+    encoder.write_image::<colortype::Gray32>(normalized_canvas.width as u32, normalized_canvas.height as u32, &normalized_canvas.data).unwrap();
+
+    // let mut image = encoder.new_image::<colortype::RGB8>(canvas.width as u32, canvas.height as u32).unwrap();
+    // let image_data = normalized_canvas.data;
+    // image.encoder().write_data(image_data).unwrap();
+    // image.finish().unwrap();
+
+    /*let gradient: std::vec::Vec<_> = ConstEquidistantLinear::<f32, _, 3>::equidistant_unchecked([
         LinSrgb::new(0.00, 0.05, 0.20),
         LinSrgb::new(0.70, 0.10, 0.20),
         LinSrgb::new(0.95, 0.90, 0.30),
@@ -288,5 +319,5 @@ fn main() {
     }
 
     println!("writing image file");
-    ppm_writer::write_binary_ppm(&post_processed_canvas, Path::new("."), "test.ppm").unwrap();
+    ppm_writer::write_binary_ppm(&post_processed_canvas, Path::new("."), "test.ppm").unwrap();*/
 }
