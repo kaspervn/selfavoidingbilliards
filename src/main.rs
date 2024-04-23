@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 use std::iter::zip;
-use std::ops::Add;
+use std::ops::{Add, AddAssign};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
@@ -22,6 +22,7 @@ use rusty_ppm::ppm_writer;
 use simple_canvas::Canvas;
 use tiff;
 use std::fs::File;
+use std::process::Output;
 use rusty_ppm::utils::generate_sample_binary_image;
 use tiff::encoder::colortype;
 
@@ -30,8 +31,8 @@ use chrono::prelude::*;
 use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
 
-type SceneLinesType = Vec<Line, 200>;
-const ARENA_EDGES: usize = 6;
+type SceneLinesType = Vec<Line, 100>;
+const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;
 
 
@@ -106,19 +107,23 @@ fn initial_arena() -> SceneLinesType {
     obstacles
 }
 
+type ShaderFunc<T> = fn(start_pos: Coord, path_length: f64, no_bounces: usize) -> T;
 
-
-fn single_simulation(canvas: &mut Canvas<f64>, obstacles: &mut SceneLinesType, rng: &mut ThreadRng)
+fn single_simulation<T: AddAssign>(canvas: &mut Canvas<T>,
+                        obstacles: &mut SceneLinesType,
+                        rng: &mut ThreadRng,
+                        canvas_shader: ShaderFunc<T>
+)
 {
     let clean_scene_size = obstacles.len();
 
     let start_pos = coord! {x: rng.gen_range(0.0 .. 1.0),
-                                y: rng.gen_range(0.0 .. 1.0)};
+                            y: rng.gen_range(0.0 .. 1.0)};
     let rand_dir =  angled_coord(rng.gen_range(0.0 .. PI*2.0)) * 10.0;
 
     let mut ball = Line::new(start_pos, start_pos + rand_dir);
     let mut path_length: f64 = 0.0;
-    let mut _no_bounces: i32 = 0;
+    let mut _no_bounces: usize = 0;
 
     loop {
         match test_ball_with_scene(ball, &obstacles) {
@@ -128,20 +133,21 @@ fn single_simulation(canvas: &mut Canvas<f64>, obstacles: &mut SceneLinesType, r
 
                 if distance < 0.0001 || obstacles.is_full() {
 
-                    let x = clamp((col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
-                    let y = clamp((col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
+                    let x = clamp(f64::round(col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
+                    let y = clamp(f64::round(col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
 
-                    canvas.data[x + canvas.width * y] += path_length;
+                    canvas.data[x + canvas.width * y] += canvas_shader(start_pos, path_length, _no_bounces);
 
                     break;
                 } else {
                     obstacles.push(Line::new(ball.start, col_point)).unwrap();
+
                     match reflection(ball.start, line, col_point) {
                         None => {
-                            let x = clamp((col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
-                            let y = clamp((col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
+                            let x = clamp(f64::round(col_point.x * canvas.width as f64) as usize, 0, canvas.width - 1);
+                            let y = clamp(f64::round(col_point.y * canvas.height as f64) as usize, 0, canvas.height - 1);
 
-                            canvas.data[x + canvas.width * y] += path_length;
+                            canvas.data[x + canvas.width * y] += canvas_shader(start_pos, path_length, _no_bounces);
                         }
                         Some(b) => {ball = b;}
                     }
@@ -170,22 +176,24 @@ enum FromThreadMsg {
     REPORT(usize)
 }
 
-fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
+fn sim_thread<T: AddAssign + Default + Clone>(rx: mpsc::Receiver<ToThreadMsg>,
               tx: mpsc::Sender<FromThreadMsg>,
-              result_canvas: Arc<Mutex<Canvas<f64>>>) {
+              result_canvas: Arc<Mutex<Canvas<T>>>,
+              shader_func: ShaderFunc<T>)
+{
     const NUMBER_OF_SIMS_PER_REPORT: usize = 100_000;
 
     let width = result_canvas.lock().unwrap().width;
     let height = result_canvas.lock().unwrap().height;
 
-    let mut thread_canvas: Canvas<f64> = Canvas::new(width, height, 0.0);
+    let mut thread_canvas: Canvas<T> = Canvas::new(width, height, T::default());
     let mut scene = initial_arena();
     let mut rng = thread_rng();
 
     loop {
 
         for _ in 0..NUMBER_OF_SIMS_PER_REPORT {
-            single_simulation(&mut thread_canvas, &mut scene, &mut rng);
+            single_simulation(&mut thread_canvas, &mut scene, &mut rng, shader_func);
         }
         tx.send(REPORT(NUMBER_OF_SIMS_PER_REPORT)).unwrap();
 
@@ -193,7 +201,7 @@ fn sim_thread(rx: mpsc::Receiver<ToThreadMsg>,
             Ok(ACCUMULATE) => {
                 let mut locked_canvas = result_canvas.lock().unwrap();
                 for (p_in, p_out) in zip(thread_canvas.iter(), locked_canvas.iter_mut()) {
-                    *p_out += p_in;
+                    *p_out += p_in.clone();
                 }
             }
             Ok(STOP) => {
@@ -216,9 +224,11 @@ struct ThreadHandle {
 
 
 fn main() {
-    let canvas: Canvas<f64> = Canvas::new(4096*2, 4096*2, 0.0);
+    let canvas: Canvas<f64> = Canvas::new(512, 512, 0.0);
 
     let shared_canvas = Arc::new(Mutex::new(canvas));
+
+    let shader: ShaderFunc<_> = |_start_pos: Coord, path_length: f64, _no_bounces: usize| path_length;
 
     const MAX_THREADS: usize = 25;
 
@@ -232,7 +242,7 @@ fn main() {
         let canvas_ref = shared_canvas.clone();
 
         let thread_handle = thread::spawn(move || {
-            sim_thread(to_thread_rx, from_thread_tx, canvas_ref)
+            sim_thread(to_thread_rx, from_thread_tx, canvas_ref, shader)
         });
 
         thread_handles.push(ThreadHandle {
@@ -243,7 +253,7 @@ fn main() {
     }
 
     //let total_simulations: usize = 1_000_000_000;
-    let total_simulations: usize = 20_000_000_000;
+    let total_simulations: usize = 20_000_000;
 
     let bar = ProgressBar::new(total_simulations as u64);
     bar.set_style(ProgressStyle::with_template("[{elapsed}]/[{eta} left] {bar:40.cyan/blue} {percent}% {pos:>7}/{len:7} {per_sec}").unwrap());
