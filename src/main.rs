@@ -35,7 +35,7 @@ const MIN_NUM_OF_SIMULATIONS: usize = 10_000_000;   // Minimum number of simulat
 
 const SHADER_FUNC: ShaderFunc<f64> = |_start_pos: Coord, path_length: f64, _no_bounces: usize| path_length;
 
-fn initial_arena() -> Obsctacles
+fn initial_obstacles() -> Obsctacles
 {
     let mut obstacles: Obsctacles = Obsctacles::new();
 
@@ -192,7 +192,7 @@ fn sim_thread<T: AddAssign + Default + Clone>(rx: mpsc::Receiver<ToThreadMsg>,
     let height = result_canvas.lock().unwrap().height;
 
     let mut thread_canvas: Canvas<T> = Canvas::new(width, height, T::default());
-    let mut scene = initial_arena();
+    let mut scene = initial_obstacles();
     let mut rng = thread_rng();
     let mut last_report_t = time::Instant::now();
 
