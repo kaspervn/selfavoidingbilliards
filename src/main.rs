@@ -11,7 +11,7 @@ use bresenham;
 use cgmath::num_traits::clamp;
 use geo::{Coord, coord, EuclideanDistance, Line, Vector2DOps};
 use geo::line_intersection::{line_intersection, LineIntersection};
-use heapless::Vec;
+use heapless;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::prelude::*;
 use simple_canvas::Canvas;
@@ -25,7 +25,7 @@ use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
 
 type ShaderFunc<T> = fn(start_pos: Coord, path_length: f64, no_bounces: usize) -> T;
-type Obsctacles = Vec<Line, MAX_NO_OBSTACLES>;
+type Obsctacles = heapless::Vec<Line, MAX_NO_OBSTACLES>;
 
 const MAX_NO_OBSTACLES: usize = 200;
 const ARENA_EDGES: usize = 17;
@@ -35,12 +35,9 @@ const MIN_NUM_OF_SIMULATIONS: usize = 10_000_000;   // Minimum number of simulat
 
 const SHADER_FUNC: ShaderFunc<f64> = |_start_pos: Coord, path_length: f64, _no_bounces: usize| path_length;
 
-const NO_THREADS: usize = 25;
-
-
 fn initial_arena() -> Obsctacles
 {
-    let mut obstacles: Obsctacles = Vec::new();
+    let mut obstacles: Obsctacles = Obsctacles::new();
 
     for i in 0..ARENA_EDGES {
         let angle0 = (i as f64)         * 2.0 * PI / (ARENA_EDGES as f64);
@@ -236,9 +233,11 @@ fn main()
     let canvas: Canvas<f64> = Canvas::new(IMAGE_SIZE, IMAGE_SIZE, 0.0);
     let shared_canvas = Arc::new(Mutex::new(canvas));
 
+    let no_threads: usize = std::thread::available_parallelism().unwrap().into();
+
     // Start all threads
-    let mut thread_handles: Vec<ThreadHandle, NO_THREADS> = Vec::new();
-    for _ in 0..NO_THREADS {
+    let mut thread_handles: Vec<ThreadHandle> = Vec::new();
+    for _ in 0..no_threads {
         let (to_thread, to_thread_rx) = mpsc::channel();
         let (from_thread_tx, from_thread) = mpsc::channel();
 
@@ -250,7 +249,7 @@ fn main()
             }),
             to_thread,
             from_thread,
-        }).unwrap();
+        });
     }
 
     // Keep track of the progress of all threads and report with a nice progress bar
