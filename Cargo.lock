@@ -357,21 +357,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 
 [[package]]
-name = "mazi_billiards_fractal"
-version = "0.1.0"
-dependencies = [
- "bresenham",
- "cgmath",
- "chrono",
- "geo",
- "heapless",
- "indicatif",
- "rand",
- "simple-canvas",
- "tiff",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -477,6 +462,21 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
+]
+
+[[package]]
+name = "self-avoiding-billiards"
+version = "0.1.0"
+dependencies = [
+ "bresenham",
+ "cgmath",
+ "chrono",
+ "geo",
+ "heapless",
+ "indicatif",
+ "rand",
+ "simple-canvas",
+ "tiff",
 ]
 
 [[package]]
