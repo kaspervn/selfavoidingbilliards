@@ -115,7 +115,7 @@ fn single_simulation<T: AddAssign>(canvas: &mut Canvas<T>,
     let mut no_bounces: usize = 0;
 
     loop {
-        let step_outcome: SimStepOutcome = match test_ball_with_obstacles(ball, &obstacles) {
+        let step_outcome = match test_ball_with_obstacles(ball, &obstacles) {
 
             Some((line, col_point, distance)) => {
                 path_length += distance;
