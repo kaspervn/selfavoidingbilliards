@@ -6,6 +6,7 @@ use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread;
 use std::time::Duration;
+use std::time;
 
 use bresenham;
 use cgmath::num_traits::clamp;
@@ -28,7 +29,7 @@ type ShaderFunc<T> = fn(start_pos: Coord, path_length: f64, no_bounces: usize) -
 type Obsctacles = heapless::Vec<Line, MAX_NO_OBSTACLES>;
 
 const MAX_NO_OBSTACLES: usize = 200;
-const ARENA_EDGES: usize = 17;
+const ARENA_EDGES: usize = 5;
 const ARENA_SIZE: f64 = 0.98;                       // size of arena, as ratio of the whole image
 const IMAGE_SIZE: usize = 512;                      // width and height in pixels
 const MIN_NUM_OF_SIMULATIONS: usize = 10_000_000;   // Minimum number of simulations to do, should not be much more
@@ -185,7 +186,8 @@ fn sim_thread<T: AddAssign + Default + Clone>(rx: mpsc::Receiver<ToThreadMsg>,
               result_canvas: Arc<Mutex<Canvas<T>>>,
               shader_func: ShaderFunc<T>)
 {
-    const NUMBER_OF_SIMS_PER_REPORT: usize = 100_000;
+    const THREAD_REPORT_INTERVAL: Duration = Duration::from_millis(50);
+    const SIM_BATCH_SIZE: usize = 100;
 
     let width = result_canvas.lock().unwrap().width;
     let height = result_canvas.lock().unwrap().height;
@@ -193,13 +195,27 @@ fn sim_thread<T: AddAssign + Default + Clone>(rx: mpsc::Receiver<ToThreadMsg>,
     let mut thread_canvas: Canvas<T> = Canvas::new(width, height, T::default());
     let mut scene = initial_arena();
     let mut rng = thread_rng();
+    let mut last_report_t = time::Instant::now();
 
     loop {
 
-        for _ in 0..NUMBER_OF_SIMS_PER_REPORT {
-            single_simulation(&mut thread_canvas, &mut scene, &mut rng, shader_func);
+        let mut no_simulations_to_report = 0;
+
+        loop {
+            for _ in 0..SIM_BATCH_SIZE {
+                single_simulation(&mut thread_canvas, &mut scene, &mut rng, shader_func);
+            }
+
+            no_simulations_to_report += SIM_BATCH_SIZE;
+
+            let now = time::Instant::now();
+            if (now - last_report_t) > THREAD_REPORT_INTERVAL {
+                last_report_t = now;
+                break;
+            }
         }
-        tx.send(REPORT(NUMBER_OF_SIMS_PER_REPORT)).unwrap();
+
+        tx.send(REPORT(no_simulations_to_report)).unwrap();
 
         match rx.recv_timeout(Duration::ZERO) {
             Ok(ACCUMULATE) => {
@@ -234,6 +250,8 @@ fn main()
     let shared_canvas = Arc::new(Mutex::new(canvas));
 
     let no_threads: usize = std::thread::available_parallelism().unwrap().into();
+
+    println!("Starting {} threads", no_threads);
 
     // Start all threads
     let mut thread_handles: Vec<ThreadHandle> = Vec::new();
