@@ -1,15 +1,17 @@
 use std::f64::consts::PI;
+use std::fs::File;
 use std::iter::zip;
 use std::ops::{Add, AddAssign};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread;
-use std::time::Duration;
 use std::time;
+use std::time::Duration;
 
 use bresenham;
 use cgmath::num_traits::clamp;
+use chrono::prelude::*;
 use geo::{Coord, coord, EuclideanDistance, Line, Vector2DOps};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use heapless;
@@ -17,10 +19,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::prelude::*;
 use simple_canvas::Canvas;
 use tiff;
-use std::fs::File;
 use tiff::encoder::colortype;
-
-use chrono::prelude::*;
 
 use crate::FromThreadMsg::REPORT;
 use crate::ToThreadMsg::{ACCUMULATE, STOP};
